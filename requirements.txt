@@ -1,0 +1,5 @@
+dash>=4.0.0
+dash-mantine-components>=2.6.0
+dash-ag-grid>=31.0.0
+plotly>=5.0.0
+pandas>=2.0.0
