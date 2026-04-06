@@ -1,4 +1,17 @@
+"""
+Dash Genie — Sales Dashboard
+
+Demonstrates core Dash patterns:
+  - Dash Mantine Components (DMC) for layout and UI
+  - dash-ag-grid for sortable/filterable/paginated data table
+  - Plotly for bar chart visualization
+  - Single callback driving multiple outputs from one button click
+
+See CLAUDE.md for architecture decisions and conventions.
+"""
+
 import random
+
 import dash
 import dash_ag_grid as dag
 import dash_mantine_components as dmc
@@ -6,26 +19,44 @@ import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc
 
 # ------------------------------------------------------------------
-# Sample data helpers
+# Domain constants
 # ------------------------------------------------------------------
 PRODUCTS = ["Widget A", "Widget B", "Gadget X", "Gadget Y", "Doohickey Z"]
 REGIONS = ["North", "South", "East", "West"]
 
+# Data generation tuning
+DATA_ROW_COUNT = 10
+UNITS_MIN, UNITS_MAX = 50, 500
+REVENUE_MIN, REVENUE_MAX = 1_000.0, 20_000.0
+GROWTH_MIN, GROWTH_MAX = -15.0, 40.0
 
-def generate_data():
-    rows = []
-    for i in range(10):
-        rows.append(
-            {
-                "id": i + 1,
-                "product": random.choice(PRODUCTS),
-                "region": random.choice(REGIONS),
-                "units_sold": random.randint(50, 500),
-                "revenue": round(random.uniform(1000, 20000), 2),
-                "growth": round(random.uniform(-15, 40), 1),
-            }
-        )
-    return rows
+# Color palette — never hardcode hex values inline
+CHART_BLUE = "#339af0"
+GROWTH_POSITIVE_COLOR = "#2f9e44"
+GROWTH_NEGATIVE_COLOR = "#e03131"
+GRID_COLOR = "#f1f3f5"
+
+
+# ------------------------------------------------------------------
+# Sample data
+# ------------------------------------------------------------------
+def generate_data() -> list[dict]:
+    """Generate a list of random sales row dicts.
+
+    Returns DATA_ROW_COUNT rows, each with: id, product, region,
+    units_sold, revenue, growth.
+    """
+    return [
+        {
+            "id": i + 1,
+            "product": random.choice(PRODUCTS),
+            "region": random.choice(REGIONS),
+            "units_sold": random.randint(UNITS_MIN, UNITS_MAX),
+            "revenue": round(random.uniform(REVENUE_MIN, REVENUE_MAX), 2),
+            "growth": round(random.uniform(GROWTH_MIN, GROWTH_MAX), 1),
+        }
+        for i in range(DATA_ROW_COUNT)
+    ]
 
 
 # ------------------------------------------------------------------
@@ -54,10 +85,15 @@ COLUMN_DEFS = [
         "flex": 1,
         "type": "numericColumn",
         "cellStyle": {
-            "function": "params.value >= 0 ? {'color': '#2f9e44'} : {'color': '#e03131'}"
+            "function": (
+                f"params.value >= 0 "
+                f"? {{'color': '{GROWTH_POSITIVE_COLOR}'}} "
+                f": {{'color': '{GROWTH_NEGATIVE_COLOR}'}}"
+            )
         },
     },
 ]
+
 
 # ------------------------------------------------------------------
 # App
@@ -86,7 +122,7 @@ app.layout = dmc.MantineProvider(
                 dmc.Stack(
                     gap="lg",
                     children=[
-                        # Header row
+                        # Page title + refresh button
                         dmc.Group(
                             children=[
                                 dmc.Title("Sales Overview", order=2),
@@ -100,53 +136,55 @@ app.layout = dmc.MantineProvider(
                             ],
                             justify="space-between",
                         ),
-                        # KPI cards
+                        # KPI summary cards
                         dmc.SimpleGrid(
                             id="kpi-cards",
                             cols={"base": 1, "sm": 3},
                             children=[],
                         ),
-                        # Chart
+                        # Bar chart
                         dmc.Paper(
                             shadow="sm",
                             p="md",
                             radius="md",
                             withBorder=True,
                             children=[
-                                dmc.Text(
-                                    "Revenue by Product",
-                                    fw=600,
-                                    size="md",
-                                    mb="sm",
+                                dmc.Text("Revenue by Product", fw=600, size="md", mb="sm"),
+                                dcc.Loading(
+                                    color=CHART_BLUE,
+                                    children=dcc.Graph(
+                                        id="revenue-chart",
+                                        style={"height": "320px"},
+                                    ),
                                 ),
-                                dcc.Graph(id="revenue-chart", style={"height": "320px"}),
                             ],
                         ),
-                        # Table
+                        # Detail table
                         dmc.Paper(
                             shadow="sm",
                             p="md",
                             radius="md",
                             withBorder=True,
                             children=[
-                                dmc.Text(
-                                    "Detail Table",
-                                    fw=600,
-                                    size="md",
-                                    mb="sm",
-                                ),
-                                dag.AgGrid(
-                                    id="data-table",
-                                    columnDefs=COLUMN_DEFS,
-                                    rowData=generate_data(),
-                                    defaultColDef={
-                                        "sortable": True,
-                                        "filter": True,
-                                        "resizable": True,
-                                    },
-                                    dashGridOptions={"pagination": True, "paginationPageSize": 10},
-                                    style={"height": "340px"},
-                                    className="ag-theme-alpine",
+                                dmc.Text("Detail Table", fw=600, size="md", mb="sm"),
+                                dcc.Loading(
+                                    color=CHART_BLUE,
+                                    children=dag.AgGrid(
+                                        id="data-table",
+                                        columnDefs=COLUMN_DEFS,
+                                        rowData=[],
+                                        defaultColDef={
+                                            "sortable": True,
+                                            "filter": True,
+                                            "resizable": True,
+                                        },
+                                        dashGridOptions={
+                                            "pagination": True,
+                                            "paginationPageSize": 10,
+                                        },
+                                        style={"height": "340px"},
+                                        className="ag-theme-alpine",
+                                    ),
                                 ),
                             ],
                         ),
@@ -159,7 +197,7 @@ app.layout = dmc.MantineProvider(
 
 
 # ------------------------------------------------------------------
-# Callback: refresh button regenerates all data
+# Callback: refresh button regenerates all outputs
 # ------------------------------------------------------------------
 @callback(
     Output("data-table", "rowData"),
@@ -168,65 +206,74 @@ app.layout = dmc.MantineProvider(
     Input("refresh-btn", "n_clicks"),
     prevent_initial_call=False,
 )
-def refresh_data(n_clicks):
-    rows = generate_data()
+def refresh_data(n_clicks: int | None) -> tuple[list[dict], go.Figure, list]:
+    """Regenerate sample data and update table, chart, and KPI cards.
 
-    # ---- KPI cards ----
-    total_revenue = sum(r["revenue"] for r in rows)
-    total_units = sum(r["units_sold"] for r in rows)
-    avg_growth = round(sum(r["growth"] for r in rows) / len(rows), 1)
+    Runs on page load (prevent_initial_call=False) and on every
+    Refresh button click. Returns safe empty fallbacks on error.
+    """
+    try:
+        rows = generate_data()
 
-    kpi_data = [
-        ("Total Revenue", f"${total_revenue:,.0f}", "green"),
-        ("Total Units Sold", f"{total_units:,}", "blue"),
-        ("Avg Growth", f"{avg_growth}%", "orange" if avg_growth >= 0 else "red"),
-    ]
-    cards = [
-        dmc.Card(
-            withBorder=True,
-            shadow="sm",
-            radius="md",
-            p="md",
-            children=[
-                dmc.Text(label, size="xs", c="dimmed", tt="uppercase", fw=600),
-                dmc.Text(value, size="xl", fw=700, c=color),
+        # ---- KPI cards ----
+        total_revenue = sum(r["revenue"] for r in rows)
+        total_units = sum(r["units_sold"] for r in rows)
+        avg_growth = round(sum(r["growth"] for r in rows) / len(rows), 1)
+
+        kpi_data = [
+            ("Total Revenue", f"${total_revenue:,.0f}", "green"),
+            ("Total Units Sold", f"{total_units:,}", "blue"),
+            ("Avg Growth", f"{avg_growth}%", "orange" if avg_growth >= 0 else "red"),
+        ]
+        cards = [
+            dmc.Card(
+                withBorder=True,
+                shadow="sm",
+                radius="md",
+                p="md",
+                children=[
+                    dmc.Text(label, size="xs", c="dimmed", tt="uppercase", fw=600),
+                    dmc.Text(value, size="xl", fw=700, c=color),
+                ],
+            )
+            for label, value, color in kpi_data
+        ]
+
+        # ---- Bar chart — aggregate revenue per product ----
+        product_rev: dict[str, float] = {}
+        for r in rows:
+            product_rev[r["product"]] = product_rev.get(r["product"], 0) + r["revenue"]
+
+        fig = go.Figure(
+            go.Bar(
+                x=list(product_rev.keys()),
+                y=list(product_rev.values()),
+                marker_color=CHART_BLUE,
+                text=[f"${v:,.0f}" for v in product_rev.values()],
+                textposition="outside",
+            )
+        )
+        fig.update_layout(
+            margin=dict(t=20, b=40, l=40, r=20),
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            yaxis=dict(title="Revenue ($)", gridcolor=GRID_COLOR, tickformat="$,.0f"),
+            xaxis=dict(title="Product"),
+            font=dict(family="sans-serif", size=12),
+        )
+
+        return rows, fig, cards
+
+    except Exception:
+        empty_fig = go.Figure()
+        empty_fig.update_layout(
+            paper_bgcolor="white",
+            plot_bgcolor="white",
+            annotations=[
+                dict(text="Error loading data", x=0.5, y=0.5, showarrow=False)
             ],
         )
-        for label, value, color in kpi_data
-    ]
-
-    # ---- Chart ----
-    # Aggregate revenue per product
-    product_rev: dict[str, float] = {}
-    for r in rows:
-        product_rev[r["product"]] = product_rev.get(r["product"], 0) + r["revenue"]
-
-    products = list(product_rev.keys())
-    revenues = list(product_rev.values())
-
-    fig = go.Figure(
-        go.Bar(
-            x=products,
-            y=revenues,
-            marker_color="#339af0",
-            text=[f"${v:,.0f}" for v in revenues],
-            textposition="outside",
-        )
-    )
-    fig.update_layout(
-        margin=dict(t=20, b=40, l=40, r=20),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        yaxis=dict(
-            title="Revenue ($)",
-            gridcolor="#f1f3f5",
-            tickformat="$,.0f",
-        ),
-        xaxis=dict(title="Product"),
-        font=dict(family="sans-serif", size=12),
-    )
-
-    return rows, fig, cards
+        return [], empty_fig, []
 
 
 if __name__ == "__main__":
